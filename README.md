@@ -13,8 +13,9 @@ Well you say I can do that using grep apple file1.txt > file2.txt. But the order
 Pipelines is more intuitive, consistent and powerful than *nix utilities and pipes.
 
 The concept was originally developed by John Hartmann of IBM Denmark. See http://en.wikipedia.org/wiki/Hartmann_pipeline. John created a mainframe-specific version, but nothing cross-platform.
-How it works
 
+How it works
+============
 pipe.py invokes the pipe program passing rest of the command line as argument (hereinafter known as a pipeline specification, or spec for short). The quotes are essential - otherwise the arguments will be parsed by the command (shell) processor.
 
 The vertical bar (|) separates the pipeline specification into stages.
