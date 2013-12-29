@@ -1,0 +1,296 @@
+More improvements
+
+To improve even more we want to provide:
+
+    smart termination
+    better initialization
+    expand the stage dictionary
+    stage specification parser
+    global and local options and parser
+    multiple pipelines and streams
+    more stages
+    REXX support
+    pipeline commands
+    subroutine pipelines 
+
+[edit] Smart Termination
+
+    When the pipeline terminates, terminate each stage.
+    add a terminate function to class Stage which does nothing.
+    add a terminate function to class writefile which closes its file.
+    add a loop to the main program to call terminate for each stage in the set.
+    Doing the above makes it easy for any stage to have its own terminate code. 
+
+[edit] Better Initialization
+
+    provide a Stage.setup method to handle the stage specification. 
+
+ This leaves the __init__ method to handle things common to all stages
+
+    provide a Stage. finalizeSetup method – to finalizeSetup the setup -useful once we implement multiple streams
+    provide a Stage. initializeRun method to initialize the pipeline for a run
+        open files, reset counters, .... 
+
+[edit] expand the stage dictionary
+
+ to include aliases such as < and > for read and write file
+
+[edit] stage specification parsing and initialization
+
+ parsing a stage’s specification is a crucial step in parsing a pipeline specification.
+ Most stages expect some specification to tell them how to do their job.
+ In the above example:
+   Readfile expects a filename
+   Locate expects a delimitedString
+   Writefile expects a filename
+
+ Shortcomings of pipe2.py regarding stage specification parsing
+   Readfile and Writefile open their respective files as part of the parsing process.
+   This should be deferred until later, especially when we come to the point
+  where we create a pipeline once and run it more than once.
+ Readfile and Writefile have no exception handling to deal with the case where
+ the filename is invalid or (for Readfile) the file is missing.
+
+ To defer opening files until runtime we enhance the pipeLine.run method by adding a call to each stage’s initializeRun method, and place the open code there. 
+ we add try – except to the open and have initializeRun add any errors to the 
+ pipeLine errors collection. After initializing all stages we then check
+ the errors collection, and abort the run if there are any fatal errors.
+
+ On the other hand the more errors we can catch while creating the pipeline
+ the better for the user. It does not make sense to test for a file’s existence
+ before running, but we can ensure (at least) that the spec contains exactly one word
+ and no illegal characters.
+
+ The Locate stage class has some specification parsing code, as it must extract the
+ Desired string from between delimiters. There are other stages that also expect
+ A delimited string, so it makes sense to create a parser for (let’s call it) a
+ delimitedString, and call that parser as needed instead of rewriting it each time.
+ This also lets us expand the meaning of delimitedString by modifying one piece of code.
+ This immediately becomes handy when you look at how the Author’s Edition defines
+ delimitedString (p 222).
+
+ Things get yet more complex – the complete syntax for Locate’s specs is given on page 457 of the Author’s Edition:
+
+See page 220-221 to learn how to read Syntax Diagrams
+
+Parsing a Locate specification means:
+
+look at the first word. Attempt to match it as an abbreviation for ANYCASE. set a results dictionary entry for anycase True or False If it matches or not. If it matches, discard the first word of the specification.
+
+look at the first word of the (remaining) specification. Attempt to match it as an abbreviation for one of MIXED, ONES, ZEROS. set results dictionary entries for mixed, ones, zeros respectively True or False If it matches one or not. If it matches, discard the first word of the (remaining) specification.
+
+Next in the syntax diagram is a syntactic variable (inputRanges). See bottom of p 221 for definition of and list of syntactic variables. Analyze the (remaining) specification to see if it begins with inputRanges. If it does, discard this portion of the specification and set a results dictionary entry for inputRanges to a list of ranges.
+
+look at the first word of the (remaining) specification. Attempt to match it as an abbreviation for ANYOF . set results dictionary entries for anyof True or False If it matches or not. If it matches, discard the first word of the (remaining) specification.
+
+Next in the syntax is a syntactic variable delimitedString. Analyze the (remaining) specification to see if it begins with a delimitedString. If it does, discard this portion of the specification and set a results dictionary entry for delimitedString to the value of the delimitedString.
+
+If any point in this process the remaining specification is an empty string, ensure there are no more required items, stop parsing, and ensure the remaining results dictionary entries for are either False or empty. Otherwise add an error to the pipeLine errors collection.
+
+
+Phew! A lot of work. A lot of opportunity to pre-program things. See the Parser Generator topic below for all the gory details>
+[edit] Multiple Pipelines
+
+It is possible to put more than one pipeline in a specification. Using the global option endchar you specify a character that divides the specification into two (or more) pipelines (spec split into 3 lines):
+
+(endchar ? separator #) readfile file1.txt # locate / apple/ # writefile file2.txt ? readfile file3.txt # locate / pear/ # writefile file4.txt
+
+The 2 pipelines are independent they can be run in any order.
+
+We alter the Python program by adding a PipeLine class:
+
+Class PipeLineSet(list):
+
+ endChar = ‘?’ # deferring the global option issue for the moment
+ def __init__(self, specs):
+   specList = specs.split(endChar)
+   for spec in specList:
+     self.append(PipeLine(spec))
+ def run(self):
+   for pipeLine in self:
+     pipeline.run()
+
+and alter the last 2 lines of main():
+
+ pipeLine = PipeLineSet(specs)
+ pipeLine.run()
+
+the above will work as long as the pipelines are independent. There are circumstances where streams interact in a way that causes a stage to wait for a record to arrive. To support these we need to run each pipeline in a thread.
+
+class PipeLineSet():
+
+ ... 
+ def run(self):
+   import threading
+   self.threads = []
+   for pipeLine in self:
+     self.threads.append(threading.Thread(target = pipeline.run)
+   for thread in self.threads:
+     thread.start()
+
+threading is a work in progress. We must repeatedly check threads until none are alive, and also find a way to determine whether we have a stall (a case where 2 threads wait on each other)
+
+There are stages that act as input drivers even though they are not first in a pipeline. Threading must be extended such that each input drivers is started in its own thread. One example is:
+
+literal—Write the Argument String literal writes its argument string into the pipeline and then passes records on the input to the output stream
+[edit] multiple streams
+
+some stages may have more than one input and/or output. Locate for example can have 2 outputs – records that match the criteria are written to the first output and the rest to the 2nd output.
+
+Thus you can construct a pipeline using Locate to separates the records into 2 streams, and processes the streams separately.
+
+We add (p 239) a label
+
+label:├──┬─word:───-──────┬──┤
+
+          ├─word.:─────────┤
+          └─word.streamID: ────┘ 
+
+to a stage specification to indicate that another stream may connect to that stage. We refer to that label in a subsequent pipeline where it acts as a driver stage. Example (note the spec is put on 3 lines with extra spaces to create a visual alignment):
+
+(end ?) readfile file1.txt | a: locate /apple/ | writefile file2.txt ? a: | writefile file3.txt
+
+Everything up to the ? is the primary stream. Everything after the ? is the secondary stream. The first appearance of a label tells us that the labeled stage may have a secondary stream connected to it. The 2nd appearance of a label must be in a non-primary stream; it identifies the stream that connects to the secondary input or output of the same stage.
+
+In the above example each record is sent by Locate to either its primary or secondary output; from there it goes to file2.txt or file3.txt.
+
+Combining streams
+
+Sometimes we want to send records into separate streams and later join them back into one stream . Faninany can have 2 inputs – records arriving on these inputs are sent to the one output.
+
+(end ?) readfile file1.txt | a: locate /apple/ | b: faninany | writefile gfile2.txt ? a: | reverse | b:
+
+One crucial feature of pipe is that records that are split into 2 or more streams and later combined are kept in their original order. This is enforced by assigning the downstream stage’s run methods to the upstream stages output methods.
+
+better setup, initialization, finalization & termination
+
+to better manage stage setup initialization we give each stage a setup(self, specs) method which we call to pass the stage specifications – and receive an indication of success or failure.
+
+to better manage stage initialization we give each stage an initialization(self, specs) method which we call each time the pipeline is run. Most stages need no initialization, but those that do override the class method. Count is one example where the total(s) need to be reset. Also used to reconnect streams that were severed.
+
+Certain operations are best done after initialization – opening files, ensuring streams are connected as required, …?
+[edit] setup, initialization, finalization are works-in-progress.
+
+To better manage stage termination we give each stage a terminate(self, specs) method which we call when the stage exits or the pipeline terminates.
+[edit] Enhanced inter-stage communication and EOF
+
+Instead of sending records between stages we send an object (packet) that includes a record attribute and an EOF attribute.
+
+When a driver stage runs out of source records it sends an EOF instead of a record to the next stage. This information can usually be, ignored, but, for example, count relies on EOF so it can write its output. An output driver could also use EOF as a signal to close its file.
+[edit] more stages
+
+p 252-259 lists all the built in stages. It is our goal to implement a subset of these with (in some cases) a subset of their functionality as defined in the Author’s Edition.
+
+Some are mainframe-specific – and not needed in a cross-platform implementation. Some are implemented in ways other than described in the Author’s Edition.
+
+Some - not, casei, zone, reverse are treated as modifiers – the act within the input stream of the modified stage. For example given: casei | zone | locate /apple/ the specs parser collects casei and zone, then modifies locate’s input stream to pass a modified record to the actual locate mechanism, retining the original record in its packet.
+
+Since we make it easy for plumbers to write their own stages we hope that they will write the ones we did not provide that they need and will also contribute them to our growing library.
+
+We will also entertain requests to write / enhance stages – in some cases charging a fee to do so.
+[edit] User-written Stages and REXX support
+
+Users normally add their own stages to CMS Pipelines by coding them in REXX.
+
+We want to support the import of user-written REXX stages into Python Pipelines, yet don’t (as of now) desire to write a complete REXX interpreter in Python. So we invented a pseudo-REXX language that allows porting of SOME REXX programs.
+
+A simple REXX stage from page 98:
+
+/* COPY REXX -- Copy unchanged */ signal on error Do forever 'readto record' 'output' record End error: exit RC*(RC<>12)in /* Yes, keep it */ end
+
+Above translated to Python PseudoREXX:
+
+class CopyREXX(RexxStage):
+
+ def run(self):
+   record = self.readto()
+   self.output(record)
+
+How this differs from CMS Pipelines:
+
+ PipeLine commands become class methods.
+ Stage run methods are called once per incoming record.
+   Therefore no need for a loop or error handler.
+
+Python Pipelines was designed to make it easy for users to write their own stages in Python! We encourage users to learn how to do this.
+
+Above translated to “pure” Python Pipelines:
+
+class Copy(Stage):
+
+ def run(self, record):
+   self.output(record)
+
+
+[edit] pipeline commands
+
+see chapter 25 pages 722-744
+[edit] subroutine pipelines
+
+page 103
+[edit] The Parser Generator and the Parser
+
+Ideally we’d have a program (let’s call it a parser generator) read the syntax diagram and construct a parsing program specifically for Locate by assembling keyword parsers and syntactic variable parsers for each element of the syntax diagram into a parser program. The parser program would include an orderedDict (results) with keys that are either keywords or syntactic variable names, initialized to various values. The parser program scans a pipe specification and updates the results dictionary values, or raises an exception.
+
+It would be difficult (not impossible) to write a program to read syntax diagrams. We can make it easier by hand-translating these diagrams into a one-line character string which we will call SSL (Syntax Specification Language). For locate SSL = "ANYcase?[MIXED|ONEs|ZEROs]?inputranges?ANYof?delimitedstring? " Where ? means optional and [] delimit choices which are separated by |.
+
+Since the SSL for a stage changes rarely we can scan it and create the parsing program once, then save the it in a database for retrieval whenever we need it.
+
+How the parsing program works:
+
+Class Stage includes:
+
+-an attribute SSL = None which is overridden by any stage class that desires its own specification parser.
+
+-A parse method that receives the specification and updates the values in the results dictionary. -a setup method that calls the parse method passing the stage specification.
+
+When a stage class is instantiated the parse method is called. parse checks to see if the class has its own SSL. If it does then it checks to see whether the parser is already loaded. If not, it attempts to retrieve the parser from the persistent store, If the parser is not found or need to be updated the parser generator is called. Once we have the parser we pass it the stage specification and receive back the results dictionary. The retrieved parser is assigned to the parser method of the class; thus the check for a saved parser is made only once.
+
+For Locate the parser contains a sequence of parser objects which are applied one at a time to the specification until the specification is used up or an error is found.
+
+The sequence looks like: [ANYcaseParser, MIXED-ONEs-ZEROsParser, inputrangesParser, ANYofParser, delimitedstringParser].
+
+results = dict(anycase = False, mixed = False, ones = False, zeros = False, inputranges0 = None, anyof = False, delimitedstring0 = None). It is actually an orderedDict.
+
+The parser’s parse method is:
+
+ def parse(self, specs)
+  results = self.results.copy()
+  for parser in self:
+    specs = parser(specs, results)
+  if specs: raise an exception
+
+Assume the specification is "ANY /apple/".
+
+anycaseParser returns specs = " /apple/" and updates results["anycase"] = True
+
+delimitedstringParser returns specs = "" and updates results["delimitedstring"] = "apple"
+
+Locate now has a dictionary from which it can structure its operation.
+
+How the parser generator works:
+
+My job is to scan the SSL and create the sequence of parsers and results dictionary or add an error to the errors collection.
+
+I must be able to respond to fairly complex and possibly nested syntax diagrams. One “worst case” is (p 281):
+
+
+My current idea is
+
+Every keyword becomes a one or more dictionary keys (one per possible abbreviation, all lower case).
+
+The corresponding value(s) are one of
+
+    a BooleanKwd instance
+    another parser
+    if the keyword is followed by a hyphen, the value(s) of the ensuing items. 
+
+a [sequence of] syntactic variable(s) that does not start with a keyword gets the name of the syntactic variable as the key and the sequence of the values of the syntactic variables as the value. 0, 1, … is appended to the key to ensure a unique key.
+
+The syntax diagram for SFS translated to SSL is: "fn-ft-drid-digit?[ALLOWEMPTY|ASIS|CHOP|COERCE|ESM-delimitedstring|Fixed-number?|KEEP NOCHOP|NOPAD|PAD-xorc?|SAFE|Variable|WORKUNIT[number|DEFAULT|PRIVATE]]"
+
+The initial result dictionary is: dict( fn0 = [], allowempty = False, asis = False, chop = False, coerce=False, esm=False, etc.
+
+When invoked to parse a spec (say "foo file a f pad fc1") a copy is made of results in which the entry for fn0 gets ["foo", "file", "a”], fixed gets True, pad gets "A".
+
+to be continued 

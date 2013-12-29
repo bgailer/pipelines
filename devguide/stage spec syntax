@@ -1,0 +1,145 @@
+Stage Specifications Syntax Diagrams and Specification Parsers
+
+In the Author's Edition and the Reference Manual you encounter Syntax Diagrams that tell you how to construct a specification for a stage. A pipeline author consults these diagram to see how to create a specification for his task. See Author's Edition chapter 20 - How to Read a Syntax Diagram.
+
+When this specification is passed to the stage, the stage must parse it to determine
+
+    its validity
+    its meaning 
+
+The stage may provide its own code for parsing or it may rely on a parser generated from a text version of the syntax diagram. It is highly desirable that most stages use a generated parser. This is much easier than writing a parser from scratch. The stage author's job then is to translate the diagram into the text version hereinafter known as the Syntax Diagram Text Version (SSTV).
+
+Generated parsers are stored in Python modules. When a stage is first encountered in a pipeline specification the module is imported and assigned to a stage class attribute. If no parser is found, or if the SSTV has changed, a (new) parser module is generated.
+
+When a stage received a specification through its setup method it passes it to the parser, which returns a list of converted values. The setup method refers to this list to custoomize the situation-specific code.
+
+Example - consider the locate stage
+
+  +———————————————————————————————————————————————————————————————————————————+
+  |                                                                           |
+  | >>——LOCATE——+—————————+——+———————+——+—————————————+——+———————+——————————> |
+  |             +—ANYcase—+  +—MIXED—+  +—inputRanges—+  +—ANYof—+            |
+  |                          +—ONEs——+                                        |
+  |                          +—ZEROs—+                                        |
+  |                                                                           |
+  | >——+—————————————————+—————————————————————————————————————————————————>< |
+  |    +—delimitedString—+                                                    |
+  |                                                                           |
+  +———————————————————————————————————————————————————————————————————————————+
+
+SSTV ="[ANYcase]?[MIXED|ONEs|ZEROS]?[inputranges]+[ANUof]?[delimitedstring]?"
+
+Where
+
+    KEYwords start with minimum abbreviation in UPPER case, syntactic variables are all lowercase.
+    []surround a group which has 1 or more |-separated alternatives and may be followed by a repeat indicator (/ = 0 or 1, * = 0 or more, + = 1 0r more). 
+
+The generated parser is a list of parsers (in this case one per group). They parse, in succession, for:
+
+    ANYcase
+    MIXED, ONES, ZEROS
+    inputRanges
+    ANYof
+    delimitedString 
+
+    The stage specification is "/apple/" 
+
+The generated parser applies each parser in its list until it encounters an error or successfully completes the specification. "/apple/" is a delimitedString. The resultant dictionary is:
+
+{'ANYCASE': False,
+'MIXED': False,
+'ONES': False,
+'ZEROS': False,
+'inputranges1: None,
+'delimitedString1: "/apple/"}
+
+[edit] Syntax Description
+
+Associated with the syntax diagram is a Syntax Description. For locate it is:
+
+ANYCASE Ignore case when comparing. 
+
+MIXED   The delimited string is to be used as a mask to test for all ones, mixed, 
+ONES    or all zero bits. Only bit positions that correspond to one bits in the
+ZEROS   mask are tested; bit positions corresponding to zero bits in the mast are 
+        ignored. The string must not be null. Records are selected if the delim-
+        ited string satisfies the condition somewhere within the specified ranges. 
+
+        ANYOF   cannot be specified with one of these keywords. 
+
+ANYOF   The delimited string specifies an enumerated set of characters rather than 
+        a string of characters. locate selects records that contain at least one of 
+        the enumerated characters within the specified input ranges. 
+
+No input range, a single input range, or one to ten input ranges in parentheses can be 
+specified. The default is to search the complete input record. 
+
+The characters to search for are specified as a delimited string. A null string is assumed 
+when the delimited string is omitted.
+
+The stage author uses this description to write a specification that controls the stage's behavior.
+[edit] The role of the stage specification parser
+
+Each stage is responsible for parsing the specification(s) it receives. Specifications consists of
+
+    (possibly abbreviated) keywords (upper or lower case)
+    syntactic variable values
+    punctuation 
+
+The parser must ensure that the tokens
+
+    are correct
+    come in the order expected 
+
+The parser must
+
+    convert each (possibly abbreviated upper or lower case) keyword to its fully expanded upper case form.
+    convert each syntactic variable value to its internal form
+    associate each converted token to its position in the stages of the syntax. 
+
+Note that the parser can only detect certain syntax and semantic errors. A stage specification might pass the parser but still be in error. Examples
+
+    "locate MIXED ANY", since the description states "ANYOF cannot be specified with one of these keywords" (which includes MIXED)
+    "ZEROZ" which meets delimitedString but the author meant "ZEROS". 
+
+[edit] Parser and Parser Module Generator
+[edit] Syntax Diagrams
+
+Sample Syntax Diagram from the Author's Edition
+
+<
+
+Syntax diagrams consist of one or more of the following components.
+
+Category  Simple Repeat    Optional   Opt/Rpt
+                                      v─────┐
+                  v───┐    ┬───┬      ┴┬───┬┴
+Single    ──A──   ┴─A─┴    └─A─┘       └─A─┘
+
+                                      v─────┐
+                  v─────┐  ┬───┬      ┴┬───┬┴
+Choice    ┬─A─┬   ┴┬─A─┬┴  ├─A─┤       ├─A─┤
+          └─B─┘    └─B─┘   └─B─┘       └─B─┘
+
+          ┌─C─┐              ┌─C─┐
+Default   ┴───┴              ┼───┼
+                             ├─A─┤
+                             └─B─┘
+
+These components may be connected in sequences. Examples
+
+    v───┐    
+──A─┴─B─┴┬──C──┬
+         ┴─D─E─┘
+
+A non-trivial real one from the Author's Edition:
+
+                                  v──────────────────────────┐
+ ──<SFS──fn──ft──dirid──┬───────┬─┴─┬───────────────────────┬┴──
+                        └─digit─┘   ├─ASIS──────────────────┤
+                                    ├─ESM──delimitedString──┤
+                                    ├─OLDDATERef────────────┤
+                                    └─WORKUNIT──┬─number──┬─┘
+                                                ├─DEFAULT─┤
+                                                └─PRIVATE─┘
+
