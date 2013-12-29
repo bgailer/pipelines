@@ -1,62 +1,88 @@
 #------------------------- pipe.py -------------------------
+class Stage():
+  """superclass all stage classes"""
 
-# Define the stage classes
+  def output(self, record): raise NotImplementedError 
+    # must be replaced by the next stage's run method
 
-class ReadFile():
+  def run(self): raise NotImplementedError 
+    # must be overridden in subclasses of Stage 
   
-  def __init__(self, sourceFileName):
-'''
-   Stage instances are initialized by passing the stage
-   specification (spec) to the __init__ method.
-   __init__ may do nothing, save the spec, or process in
-   some meaningful manner.
-'''   
-    self.sourceFileName = sourceFileName
-
+class Readfile(Stage):
+  
+  def __init__(self, specs):
+    self.fileName = specs
+  
   def run(self):
-'''
- each stage class has a run method.The run method of the
- input driver is called once to start that stage.
-'''
-    with open(self.sourceFileName, "r") as f:
+    with open(self.fileName) as f:
       for record in f:
-        self.output(record) # each stage class has an output method
+        record = record.strip('\n')
+        self.output(record)
       self.output()
 
-class Locate:
+class Locate(Stage):
 
-  def __init__(self, locateStr):
-    self.locateStr = locateStr
+  def __init__(self, specs):
+    # the stage specification (specs) is a "delimitedString"
+    # a delimitedString starts and ends with a delimiter and has no other occurrence 
+    # of the delimiter.
+    # the delimiter is any non-blank character.
+    # the rest of the delimitedString is its value.
+    # in our example /apple/ is the delimitedString; apple is its value.
+    
+    # parse specs to ensure it is a delimitedString and get its value
+    specs = specs.strip() # ignore any leading or trailing blanks
+    delimiter = specs[0] # get the delimiter
+    if specs[-1] != delimiter: # ensure last char == delimiter
+      raise "invalid delimited string"
+    self.locateString = specs[1:-1] # remainder is the value
+    if delimiter in self.locateString: # ensure delimiter is not in the value
+      raise "invalid delimited string"
 
-  def run(self,record=None):
-    if record is None or record.find(self.locateStr) >= 0:
-      self.output(record)
+  def run(self, record=None):
+    if record is None or record.find(self.locateString) >= 0:
+      self.output(record) 
 
-class WriteFile:
-  
-  def __init__(self, destFileName):
-    self. destFile = open(destFileName, "w")
-  def run(self, record):    
+class Writefile(Stage):
+
+  def __init__(self, destFileName ):
+    self.destFile = open(destFileName, "w")
+
+  def run(self, record):
     if record is None:
-      self. destFile.close()
+      self.destFile.close()
     else:
-      self.destFile.write(record)
+      self.destFile .write(record + '\n')
+    
+# create dictionary {stageName:stageClass, ...} so we can lookup a stage name from the spec and get the class object
+stageDict = dict(readfile = Readfile,
+                 locate = Locate,
+                 writefile = Writefile)
 
-# Create stage instances passing the stage specification to __init__.
-# This is the pipeline specification we are applying:
-# "readfile c:\file1.txt | locate /apple/ | writefile c:\file2.txt"
+class PipeLine(list): # instance is a list of stage instances
+  seperator = '|' 
+  def __init__(self, specs):
+    specList = specs.split(self.seperator) 
+    # ["readfile c:/file1.txt ", "locate /apple/ ", "writefile c:/file2.txt"]
+    for stage in specList:
+      stageName, stageSpecs = stage.split(None, 1) # "["readfile", "c:/file1.txt "]
+      StageClass = stageDict[stageName]
+      stageInstance = StageClass(stageSpecs)
+      self.append(stageInstance)
+      if len(self) > 1: # connect to prior stage
+        priorStage.output = stageInstance.run
+      priorStage = stageInstance
+  def run(self):
+    self[0].run() # start the input driver stage
+    
+def main():
+  import sys
+  if len(sys.argv) > 1: # called from command line
+    specs = sys.argv[1]
+  else:
+    specs = "readfile c:/file1.txt | locate /apple/ | writefile c:/file2.txt"
+  pipeLine = PipeLine(specs)
+  pipeLine.run()
 
-stage1 = ReadFile("c:/file1.txt")
-stage2 = Locate("apple")
-stage3 = WriteFile("c:/file2.txt")
-
-# connect the output method  of each stage to the run method of the next.
-
-stage1.output = stage2.run
-stage2.output = stage3.run
-
-# start the pipeline
-
-stage1.run()
-
+main()
 #------------------------- end pipe.py -------------------------
